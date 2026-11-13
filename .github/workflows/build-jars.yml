@@ -1,4 +1,4 @@
-name: Build JARs
+name: Build JARs with runtime dependencies
 on:
   push:
     branches: [master]
@@ -15,11 +15,30 @@ jobs:
           distribution: temurin
           java-version: '8'
           cache: maven
-      - name: Build Maven packages
-        run: mvn --batch-mode -Dmaven.javadoc.skip=true package
-      - name: Upload JARs
+      - name: Build and install modules
+        run: mvn --batch-mode -Dmaven.javadoc.skip=true -Dgpg.skip=true install
+      - name: Copy runtime dependencies for each module
+        run: mvn --batch-mode org.apache.maven.plugins:maven-dependency-plugin:3.6.1:copy-dependencies -DincludeScope=runtime '-DoutputDirectory=${project.build.directory}/runtime-dependencies'
+      - name: Collect modules and runtime dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p bundle
+          for module in unidbg-api unidbg-android unidbg-ios backend/dynarmic backend/hypervisor backend/kvm backend/unicorn2; do
+            mkdir -p "bundle/$module/lib"
+            cp "$module"/target/*-SNAPSHOT.jar "bundle/$module/"
+            if [ -d "$module/target/runtime-dependencies" ]; then
+              cp -a "$module/target/runtime-dependencies/." "bundle/$module/lib/"
+            fi
+          done
+          cat > bundle/README.txt <<'EOF'
+          Each module directory contains its compiled JAR and lib/ with Maven compile and runtime dependencies, including transitive dependencies.
+          For an application, use the relevant module JAR and its lib/ files on the Java classpath. Additional backend modules are optional and can require their own JARs and lib/ dependencies.
+          Java is not included. These are libraries, not a standalone executable. Tests and Javadoc generation were skipped.
+          EOF
+      - name: Upload modules and runtime dependencies
         uses: actions/upload-artifact@v4
         with:
-          name: unidbg-jars
-          path: '**/target/*.jar'
+          name: unidbg-with-runtime-dependencies
+          path: bundle/
           if-no-files-found: error
